@@ -159,6 +159,38 @@ A fourth workflow (`buf-generate.yml`) runs on a schedule (every 6 hours) and on
 - **Dual-protocol SDK**: gRPC for inventory operations, REST (`requests`) for RBAC workspace queries. Both share a single `OAuth2ClientCredentials` instance.
 - **`google-auth` adapter**: `GoogleOAuth2ClientCredentials` adapts the SDK's `OAuth2ClientCredentials` to the `google.auth.credentials.Credentials` interface for gRPC auth metadata injection.
 
+## Maintaining Examples
+
+When adding or changing public API surface, agents must create or update corresponding example scripts in `examples/`.
+
+### When to add or update examples
+
+- **New SDK method or service**: Add a new example demonstrating basic usage.
+- **Changed method signature or behavior**: Update any existing example that calls the affected API.
+- **New authentication or connection pattern**: Add an example showing the new pattern end-to-end.
+- **Deprecated API replaced**: Update examples to use the replacement; remove references to the deprecated path.
+
+### Conventions
+
+- **Directory**: All examples live in `examples/` at the repository root.
+- **Naming**: `snake_case.py` — name the file after the feature or operation it demonstrates (e.g., `check.py`, `report_resource.py`, `rbac_list_workspaces.py`).
+- **Runnable scripts**: Each example must be a standalone script that can be executed directly (`python examples/<name>.py`). Use `if __name__ == "__main__": run()` (sync) or `if __name__ == "__main__": asyncio.run(run())` (async).
+- **Environment variables for configuration**: Use `os.environ.get()` for endpoints, credentials, and other runtime config (e.g., `KESSEL_ENDPOINT`, `AUTH_CLIENT_ID`). Never hardcode secrets.
+- **ClientBuilder pattern**: Demonstrate the fluent builder (`ClientBuilder(target).insecure().build()` or `.oauth2_client_authenticated(creds).build()`).
+- **Error handling**: Catch `grpc.RpcError` specifically — never bare `except Exception`.
+- **Channel lifecycle**: Always close channels via context manager — `with channel:` for sync (`.build()`) or `async with channel:` for async (`.build_async()`). Unclosed channels leak connections and file descriptors.
+- **Print output**: Print results to stdout so users can see what the API returns.
+- **Not automated tests**: Examples require a live Kessel server and are not run in CI. Unit tests belong in `tests/`.
+
+### Linting
+
+Examples are included in CI lint checks. Run formatting and linting before committing:
+
+```bash
+black --exclude '.*_pb2(_grpc)?\.py' src/ examples/
+flake8 --exclude '*_pb2.py,*_pb2_grpc.py' src/ examples/
+```
+
 ## Quick Reference Commands
 
 ```bash
