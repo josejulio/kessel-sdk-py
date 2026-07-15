@@ -281,7 +281,7 @@ def list_workspaces(
         )
 
         last_token = None
-        for response in inventory.StreamedListObjects(request):
+        for response in inventory.streamed_list_objects(request):
             yield response
             if response.pagination is not None:
                 last_token = response.pagination.continuation_token
@@ -328,7 +328,7 @@ async def list_workspaces_async(
         )
 
         last_token = None
-        async for response in inventory.StreamedListObjects(request):
+        async for response in inventory.streamed_list_objects(request):
             yield response
             if response.pagination is not None:
                 last_token = response.pagination.continuation_token

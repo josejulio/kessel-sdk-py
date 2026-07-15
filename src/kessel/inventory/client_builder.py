@@ -1,8 +1,8 @@
 """
-ClientBuilder for Connect-Python based Kessel SDK.
+ClientBuilder for Kessel SDK.
 
-Provides a fluent builder API for creating authenticated Connect-Python clients
-while maintaining backwards compatibility with the grpcio-based API.
+Provides a fluent builder API for creating authenticated RPC clients
+with support for OAuth2, custom TLS, and various connection modes.
 """
 
 from typing import Self, TYPE_CHECKING
@@ -19,8 +19,6 @@ from connectrpc.interceptor import (
 from kessel.inventory.connect_wrapper import (
     StubWrapper,
     AsyncStubWrapper,
-    ChannelWrapper,
-    AsyncChannelWrapper,
 )
 from kessel.inventory.v1beta2.inventory_service_connect import (
     KesselInventoryServiceClientSync,
@@ -80,17 +78,17 @@ class AsyncOAuth2Interceptor(UnaryInterceptor):
 
 class ClientBuilder:
     """
-    Fluent builder for creating Connect-Python clients.
+    Fluent builder for creating authenticated RPC clients.
 
-    Maintains API compatibility with grpcio-based ClientBuilder while using
-    Connect-Python internally for pure Python implementation and faster builds.
+    Provides a simple API for configuring authentication, TLS, and connection options
+    for Kessel service clients.
 
     Example:
         # Insecure connection
-        stub, channel = ClientBuilder("localhost:9000").insecure().build()
+        client = ClientBuilder("localhost:9000").insecure().build()
 
         # OAuth2 authenticated
-        stub, channel = ClientBuilder("localhost:9000")
+        client = ClientBuilder("localhost:9000")
             .oauth2_client_authenticated(credentials)
             .build()
 
@@ -127,10 +125,23 @@ class ClientBuilder:
 
         Args:
             oauth2_client_credentials: OAuth2 credentials instance
-            channel_credentials: Channel credentials (for TLS) - currently unused
+            channel_credentials: Optional TLS/channel credentials. If provided (even as
+                a sentinel value), TLS will be used. Pass None to use default TLS behavior
+                (secure by default). Use .insecure() for plaintext connections.
 
         Returns:
             Self for method chaining
+
+        Example:
+            # Default TLS (secure)
+            .oauth2_client_authenticated(creds)
+
+            # Explicit TLS with ChannelCredentials (cross-compatible)
+            import grpc
+            .oauth2_client_authenticated(creds, grpc.ssl_channel_credentials())
+
+            # For plaintext (testing only)
+            .oauth2_client_authenticated(creds).insecure()
         """
         self._oauth2_credentials = oauth2_client_credentials
         self._channel_credentials = channel_credentials
@@ -141,34 +152,90 @@ class ClientBuilder:
         """
         Configure generic authentication.
 
-        Note: call_credentials are currently not supported with Connect-Python.
-        Use oauth2_client_authenticated() instead.
+        Note: With Connect-Python (v3.0+), call_credentials must be OAuth2ClientCredentials
+        returned from kessel.grpc.oauth2_call_credentials(). For other credential types,
+        use the transport-specific authentication mechanisms.
 
         Args:
-            call_credentials: Call credentials (not supported)
-            channel_credentials: Channel credentials (for TLS)
+            call_credentials: OAuth2ClientCredentials from oauth2_call_credentials()
+            channel_credentials: Optional TLS/channel credentials. If provided (even as
+                a sentinel value), TLS will be used. Accepts ChannelCredentials objects
+                for cross-SDK compatibility.
 
         Returns:
             Self for method chaining
+
+        Raises:
+            TypeError: If call_credentials is not None and not OAuth2ClientCredentials
+
+        Example:
+            from kessel.auth import OAuth2ClientCredentials
+            from kessel.grpc import oauth2_call_credentials
+            import grpc  # Optional, for explicit TLS
+
+            creds = OAuth2ClientCredentials(...)
+            call_creds = oauth2_call_credentials(creds)
+
+            # With default TLS
+            client = (
+                ClientBuilder(target)
+                .authenticated(call_credentials=call_creds)
+                .build()
+            )
+
+            # With explicit TLS (transport-agnostic)
+            client = (
+                ClientBuilder(target)
+                .authenticated(
+                    call_credentials=call_creds,
+                    channel_credentials=grpc.ssl_channel_credentials()
+                )
+                .build()
+            )
         """
         if call_credentials is not None:
-            raise NotImplementedError(
-                "Generic call_credentials are not supported with Connect-Python. "
-                "Use oauth2_client_authenticated() for OAuth2 authentication."
-            )
-        self._call_credentials = call_credentials
+            # Check if it's OAuth2ClientCredentials (which oauth2_call_credentials returns)
+            from kessel.auth.auth import OAuth2ClientCredentials
+
+            if not isinstance(call_credentials, OAuth2ClientCredentials):
+                raise TypeError(
+                    "call_credentials must be OAuth2ClientCredentials from "
+                    "kessel.grpc.oauth2_call_credentials(). "
+                    f"Got: {type(call_credentials).__name__}"
+                )
+            # Store as OAuth2 credentials for interceptor creation
+            self._oauth2_credentials = call_credentials
+            self._call_credentials = None  # Not using call credentials
+        else:
+            self._call_credentials = None
+            self._oauth2_credentials = None
+
         self._channel_credentials = channel_credentials
+        self._insecure = False
         return self
 
     def unauthenticated(self, channel_credentials=None) -> Self:
         """
-        Configure unauthenticated connection.
+        Configure unauthenticated connection (server auth only, no client credentials).
 
         Args:
-            channel_credentials: Channel credentials (for TLS) - currently unused
+            channel_credentials: Optional TLS/channel credentials. If provided, TLS will
+                be used for the connection. Accepts ChannelCredentials objects for
+                cross-SDK compatibility. Pass None to use default TLS behavior.
 
         Returns:
             Self for method chaining
+
+        Example:
+            # Default TLS, no client auth
+            .unauthenticated()
+
+            # Explicit TLS with ChannelCredentials
+            import grpc
+            .unauthenticated(grpc.ssl_channel_credentials())
+
+            # Plaintext (testing only)
+            .unauthenticated().insecure()
         """
         self._call_credentials = None
         self._oauth2_credentials = None
@@ -188,22 +255,73 @@ class ClientBuilder:
         self._channel_credentials = None
         return self
 
-    def build(self):
+    def _should_use_tls(self) -> bool:
         """
-        Build synchronous client and channel.
+        Determine whether to use TLS based on configuration.
+
+        Returns True (use HTTPS/TLS) if:
+        - Not explicitly insecure, AND
+        - channel_credentials is secure (or None, which defaults to secure)
+
+        This matches SDK spec behavior where channel_credentials control TLS.
+        """
+        if self._insecure:
+            return False
+
+        # Check if credentials explicitly mark insecure
+        if self._channel_credentials is not None:
+            # If it's a ChannelCredentials object, check is_secure()
+            if hasattr(self._channel_credentials, "is_secure"):
+                return self._channel_credentials.is_secure()
+            # If it's another credential object, assume secure
+            return True
+
+        # Default to TLS (secure by default)
+        return True
+
+    def _configure_tls(self, http_transport_class, http_version):
+        """
+        Configure TLS for pyqwest HTTPTransport.
+
+        Args:
+            http_transport_class: SyncHTTPTransport or HTTPTransport class
+            http_version: HTTPVersion to use
 
         Returns:
-            Tuple of (stub, channel) where:
-                - stub: StubWrapper providing grpcio-compatible API
-                - channel: ChannelWrapper providing context manager
+            Configured transport instance with TLS settings
+        """
+        from kessel.grpc import ChannelCredentials
+
+        # Extract TLS config from channel_credentials if it's a ChannelCredentials object
+        tls_config = {}
+        if isinstance(self._channel_credentials, ChannelCredentials):
+            if self._channel_credentials.root_certificates:
+                tls_config["tls_ca_cert"] = self._channel_credentials.root_certificates
+            if self._channel_credentials.private_key:
+                tls_config["tls_key"] = self._channel_credentials.private_key
+            if self._channel_credentials.certificate_chain:
+                tls_config["tls_cert"] = self._channel_credentials.certificate_chain
+            tls_config["tls_include_system_certs"] = self._channel_credentials.include_system_certs
+
+        # Create transport with TLS config
+        return http_transport_class(http_version=http_version, **tls_config)
+
+    def build(self):
+        """
+        Build synchronous client.
+
+        Returns:
+            StubWrapper providing transport-agnostic API with context manager support.
+            The client supports `with` statement for automatic resource cleanup.
 
         Example:
-            stub, channel = ClientBuilder("localhost:9000").insecure().build()
-            with channel:
-                response = stub.Check(request)
+            client = ClientBuilder("localhost:9000").insecure().build()
+            with client:
+                response = client.Check(request)
         """
-        # Determine address with protocol
-        protocol_scheme = "http" if self._insecure else "https"
+        # Determine address with protocol based on TLS configuration
+        use_tls = self._should_use_tls()
+        protocol_scheme = "https" if use_tls else "http"
         address = f"{protocol_scheme}://{self._target}"
 
         # Build interceptors list
@@ -212,11 +330,11 @@ class ClientBuilder:
             interceptors.append(OAuth2Interceptor(self._oauth2_credentials))
 
         # Create Connect client using gRPC protocol
-        # For non-TLS gRPC, configure HTTP/2 transport explicitly
+        # Configure HTTP/2 transport for gRPC compatibility with TLS settings
         # See: https://connectrpc.com/docs/python/grpc-compatibility
         from pyqwest import SyncClient, SyncHTTPTransport, HTTPVersion
 
-        http2_transport = SyncHTTPTransport(http_version=HTTPVersion.HTTP2)
+        http2_transport = self._configure_tls(SyncHTTPTransport, HTTPVersion.HTTP2)
         http_client = SyncClient(transport=http2_transport)
 
         connect_client = KesselInventoryServiceClientSync(
@@ -227,28 +345,29 @@ class ClientBuilder:
             interceptors=tuple(interceptors) if interceptors else (),
         )
 
-        # Wrap to match grpcio API
+        # Wrap for exception handling API
+        # Connect clients support context managers natively, so we only wrap
+        # for exception conversion and method name compatibility
         stub = StubWrapper(connect_client)
-        channel = ChannelWrapper(connect_client)
 
-        return stub, channel
+        return stub
 
     def build_async(self):
         """
-        Build asynchronous client and channel.
+        Build asynchronous client.
 
         Returns:
-            Tuple of (stub, channel) where:
-                - stub: AsyncStubWrapper providing grpcio.aio-compatible API
-                - channel: AsyncChannelWrapper providing async context manager
+            AsyncStubWrapper providing async API with async context manager support.
+            The client supports `async with` statement for automatic resource cleanup.
 
         Example:
-            stub, channel = ClientBuilder("localhost:9000").insecure().build_async()
-            async with channel:
-                response = await stub.Check(request)
+            client = ClientBuilder("localhost:9000").insecure().build_async()
+            async with client:
+                response = await client.Check(request)
         """
-        # Determine address with protocol
-        protocol_scheme = "http" if self._insecure else "https"
+        # Determine address with protocol based on TLS configuration
+        use_tls = self._should_use_tls()
+        protocol_scheme = "https" if use_tls else "http"
         address = f"{protocol_scheme}://{self._target}"
 
         # Build interceptors list
@@ -257,23 +376,24 @@ class ClientBuilder:
             interceptors.append(AsyncOAuth2Interceptor(self._oauth2_credentials))
 
         # Create Connect async client using gRPC protocol
-        # For non-TLS gRPC, configure HTTP/2 transport explicitly
+        # Configure HTTP/2 transport for gRPC compatibility with TLS settings
         # See: https://connectrpc.com/docs/python/grpc-compatibility
         from pyqwest import Client, HTTPTransport, HTTPVersion
 
-        http2_transport = HTTPTransport(http_version=HTTPVersion.HTTP2)
+        http2_transport = self._configure_tls(HTTPTransport, HTTPVersion.HTTP2)
         http_client = Client(transport=http2_transport)
 
         connect_client = KesselInventoryServiceClient(
             address=address,
-            protocol=ProtocolType.GRPC,  # Use gRPC protocol to talk to kratos-go
+            protocol=ProtocolType.GRPC,  # Use gRPC protocol
             http_client=http_client,
             send_compression=None,  # Send uncompressed (server will indicate support via headers)
             interceptors=tuple(interceptors) if interceptors else (),
         )
 
-        # Wrap to match grpcio.aio API
+        # Wrap for exception handling.aio API
+        # Connect clients support async context managers natively, so we only wrap
+        # for exception conversion and method name compatibility
         stub = AsyncStubWrapper(connect_client)
-        channel = AsyncChannelWrapper(connect_client)
 
-        return stub, channel
+        return stub

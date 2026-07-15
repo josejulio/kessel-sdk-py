@@ -1,5 +1,5 @@
 import os
-from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 from google.protobuf import struct_pb2
 from kessel.inventory.v1beta2 import (
     report_resource_request_pb2,
@@ -10,9 +10,9 @@ from kessel.inventory.v1beta2 import (
 
 KESSEL_ENDPOINT = os.environ.get("KESSEL_ENDPOINT", "localhost:9000")
 
-stub, channel = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
+client = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
 
-with channel:
+with client:
 
     # Build protobuf Struct for common metadata
     common_struct = struct_pb2.Struct()
@@ -51,7 +51,7 @@ with channel:
     )
 
     try:
-        response = stub.ReportResource(request)
+        response = client.report_resource(request)
         print("Resource reported successfully")
-    except ConnectError as e:
-        print(f"Error reporting resource: {e.message}")
+    except RpcError as e:
+        print(f"Error reporting resource: {e.details()}")

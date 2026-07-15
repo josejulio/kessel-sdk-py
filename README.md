@@ -2,6 +2,16 @@
 
 A Python gRPC library for connecting to [Project Kessel](https://github.com/project-kessel) services. This provides the foundational gRPC client library for Kessel Inventory API, with plans for a higher-level SDK with fluent APIs, OAuth support, and advanced features in future releases.
 
+## What's New in v3.0
+
+Version 3.0 replaces `grpcio` with [Connect-Python](https://github.com/connectrpc/connect-python) for:
+- **Faster hermetic builds** (no C compilation needed)
+- **Pure Python implementation** (eliminates native dependency compilation)
+- **Identical gRPC protocol** (100% server compatible)
+- **Backward-compatible API** (minimal code changes)
+
+See [CONNECT_MIGRATION.md](CONNECT_MIGRATION.md) for migration guide.
+
 ## Installation
 
 Install the package using pip:

@@ -1,5 +1,5 @@
 import os
-from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 
 from kessel.inventory.v1beta2 import (
     delete_resource_request_pb2,
@@ -13,9 +13,9 @@ KESSEL_ENDPOINT = os.environ.get("KESSEL_ENDPOINT", "localhost:9000")
 
 
 def run():
-    stub, channel = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
+    client = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
 
-    with channel:
+    with client:
         delete_request = delete_resource_request_pb2.DeleteResourceRequest(
             reference=resource_reference_pb2.ResourceReference(
                 resource_type="host",
@@ -26,13 +26,13 @@ def run():
 
         # Send gRPC request
         try:
-            response = stub.DeleteResource(delete_request)
+            response = client.delete_resource(delete_request)
             print("Resource deleted successfully")
             print(response)
-        except ConnectError as e:
-            print("RPC error occurred:")
-            print(f"Code: {e.code}")
-            print(f"Message: {e.message}")
+        except RpcError as e:
+            print("gRPC error occurred:")
+            print(f"Code: {e.code()}")
+            print(f"Message: {e.details()}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import os
-from connectrpc.errors import ConnectError
 
 from kessel.auth import fetch_oidc_discovery, OAuth2ClientCredentials
+from kessel.grpc import RpcError
 from kessel.inventory.v1beta2 import (
     check_request_pb2,
     reporter_reference_pb2,
@@ -29,12 +29,11 @@ def run():
             token_endpoint=token_endpoint,
         )
 
-        stub, channel = (
+        client = (
             ClientBuilder(KESSEL_ENDPOINT).oauth2_client_authenticated(auth_credentials).build()
         )
-        # channel needs to be closed to free up resources
 
-        with channel:
+        with client:
             subject = subject_reference_pb2.SubjectReference(
                 resource=resource_reference_pb2.ResourceReference(
                     reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
@@ -55,14 +54,14 @@ def run():
                 object=resource_ref,
             )
 
-            response = stub.Check(request)
+            response = client.check(request)
             print("Check response received successfully")
             print(response)
 
-    except ConnectError as e:
+    except RpcError as e:
         print("RPC error occurred during Check:")
-        print(f"Code: {e.code}")
-        print(f"Message: {e.message}")
+        print(f"Code: {e.code()}")
+        print(f"Details: {e.details()}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import os
-from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 
 from kessel.inventory.v1beta2 import (
     check_bulk_request_pb2,
@@ -13,9 +13,9 @@ KESSEL_ENDPOINT = os.environ.get("KESSEL_ENDPOINT", "localhost:9000")
 
 
 def run():
-    stub, channel = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
+    client = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
 
-    with channel:
+    with client:
         # Item 1: Check if bob can view widgets in workspace_123
         item1 = check_bulk_request_pb2.CheckBulkRequestItem(
             object=workspace_resource("workspace_123"),
@@ -44,7 +44,7 @@ def run():
         check_bulk_request = check_bulk_request_pb2.CheckBulkRequest(items=[item1, item2, item3])
 
         try:
-            check_bulk_response = stub.CheckBulk(check_bulk_request)
+            check_bulk_response = client.check_bulk(check_bulk_request)
             print("CheckBulk response received successfully")
             print(f"Total pairs in response: {len(check_bulk_response.pairs)}\n")
 
@@ -63,10 +63,10 @@ def run():
                 elif pair.HasField("error"):
                     print(f"Error: Code={pair.error.code}, Message={pair.error.message}")
 
-        except ConnectError as e:
-            print("RPC error occurred during CheckBulk:")
-            print(f"Code: {e.code}")
-            print(f"Message: {e.message}")
+        except RpcError as e:
+            print("gRPC error occurred during CheckBulk:")
+            print(f"Code: {e.code()}")
+            print(f"Message: {e.details()}")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import os
-from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 
 from kessel.inventory.v1beta2 import (
     representation_type_pb2,
@@ -15,9 +15,9 @@ KESSEL_ENDPOINT = os.environ.get("KESSEL_ENDPOINT", "localhost:9000")
 
 
 def run():
-    stub, channel = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
+    client = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
 
-    with channel:
+    with client:
         object_type = representation_type_pb2.RepresentationType(
             resource_type="host",
             reporter_type="hbi",
@@ -36,15 +36,15 @@ def run():
         )
 
         try:
-            responses = stub.StreamedListObjects(request)
+            responses = client.streamed_list_objects(request)
             print("Received streamed responses:")
             for response in responses:
                 print(response)
 
-        except ConnectError as e:
-            print("RPC error occurred:")
-            print(f"Code: {e.code}")
-            print(f"Message: {e.message}")
+        except RpcError as e:
+            print("gRPC error occurred:")
+            print(f"Code: {e.code()}")
+            print(f"Message: {e.details()}")
 
 
 if __name__ == "__main__":

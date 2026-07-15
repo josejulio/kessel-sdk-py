@@ -1,8 +1,8 @@
 import asyncio
 import os
-from connectrpc.errors import ConnectError
 
 from kessel.auth import fetch_oidc_discovery, OAuth2ClientCredentials
+from kessel.grpc import RpcError
 from kessel.inventory.v1beta2 import (
     ClientBuilder,
 )
@@ -30,21 +30,21 @@ def run_sync():
             token_endpoint=token_endpoint,
         )
 
-        stub, channel = (
+        client = (
             ClientBuilder(KESSEL_ENDPOINT).oauth2_client_authenticated(auth_credentials).build()
         )
 
-        with channel:
+        with client:
             subject = principal_subject(SUBJECT_ID, SUBJECT_DOMAIN)
             print(f"Listing workspaces (sync) for subject='{SUBJECT_ID}' relation='{RELATION}'")
-            for obj in list_workspaces(stub, subject=subject, relation=RELATION):
+            for obj in list_workspaces(client, subject=subject, relation=RELATION):
                 print(f"{obj}")
                 print(f"{obj.pagination.continuation_token}")
 
-    except ConnectError as e:
-        print("RPC error occurred during list_workspaces (sync):")
-        print(f"Code: {e.code}")
-        print(f"Message: {e.message}")
+    except RpcError as e:
+        print("gRPC error occurred during list_workspaces (sync):")
+        print(f"Code: {e.code()}")
+        print(f"Details: {e.details()}")
 
 
 async def run_async():
@@ -58,23 +58,23 @@ async def run_async():
             token_endpoint=token_endpoint,
         )
 
-        stub, channel = (
+        client = (
             ClientBuilder(KESSEL_ENDPOINT)
             .oauth2_client_authenticated(auth_credentials)
             .build_async()
         )
 
-        async with channel:
+        async with client:
             subject = principal_subject(SUBJECT_ID, SUBJECT_DOMAIN)
             print(f"Listing workspaces (async) for subject='{SUBJECT_ID}' relation='{RELATION}'")
-            async for obj in list_workspaces_async(stub, subject=subject, relation=RELATION):
+            async for obj in list_workspaces_async(client, subject=subject, relation=RELATION):
                 print(f"{obj}")
                 print(f"{obj.pagination.continuation_token}")
 
-    except ConnectError as e:
-        print("RPC error occurred during list_workspaces (async):")
-        print(f"Code: {e.code}")
-        print(f"Message: {e.message}")
+    except RpcError as e:
+        print("gRPC error occurred during list_workspaces (async):")
+        print(f"Code: {e.code()}")
+        print(f"Details: {e.details()}")
 
 
 if __name__ == "__main__":

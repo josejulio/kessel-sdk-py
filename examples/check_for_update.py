@@ -1,5 +1,5 @@
 import os
-from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 
 from kessel.inventory.v1beta2 import (
     check_for_update_request_pb2,
@@ -14,9 +14,9 @@ KESSEL_ENDPOINT = os.environ.get("KESSEL_ENDPOINT", "localhost:9000")
 
 
 def run():
-    stub, channel = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
+    client = ClientBuilder(KESSEL_ENDPOINT).insecure().build()
 
-    with channel:
+    with client:
         # Prepare the subject reference object
         subject = subject_reference_pb2.SubjectReference(
             resource=resource_reference_pb2.ResourceReference(
@@ -40,13 +40,13 @@ def run():
         )
 
         try:
-            checkforupdate_response = stub.CheckForUpdate(checkforupdate_request)
+            checkforupdate_response = client.check_for_update(checkforupdate_request)
             print("CheckForUpdate response received successfully")
             print(checkforupdate_response)
-        except ConnectError as e:
-            print("RPC error occurred during CheckForUpdate:")
-            print(f"Code: {e.code}")
-            print(f"Message: {e.message}")
+        except RpcError as e:
+            print("gRPC error occurred during CheckForUpdate:")
+            print(f"Code: {e.code()}")
+            print(f"Message: {e.details()}")
 
 
 if __name__ == "__main__":

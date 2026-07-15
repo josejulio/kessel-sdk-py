@@ -1,6 +1,6 @@
 import asyncio
 import os
-from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 
 from kessel.auth import fetch_oidc_discovery, OAuth2ClientCredentials
 from kessel.inventory.v1beta2 import (
@@ -30,16 +30,16 @@ async def run():
             token_endpoint=token_endpoint,
         )
 
-        stub, channel = (
+        client = (
             ClientBuilder(KESSEL_ENDPOINT)
             .oauth2_client_authenticated(auth_credentials)
             .build_async()
         )
         # channel needs to be closed to free up resources
 
-        async with channel:
+        async with client:
             # or can be used as stub = ... and use other mechanism to
-            # free resources via `await stub.close()`
+            # free resources via `await client.close()`
             subject = subject_reference_pb2.SubjectReference(
                 resource=resource_reference_pb2.ResourceReference(
                     reporter=reporter_reference_pb2.ReporterReference(type="rbac"),
@@ -60,14 +60,14 @@ async def run():
                 object=resource_ref,
             )
 
-            response = await stub.Check(request)
+            response = await client.check(request)
             print("Check response received successfully")
             print(response)
 
-    except ConnectError as e:
-        print("RPC error occurred during Check:")
-        print(f"Code: {e.code}")
-        print(f"Message: {e.message}")
+    except RpcError as e:
+        print("gRPC error occurred during Check:")
+        print(f"Code: {e.code()}")
+        print(f"Message: {e.details()}")
 
 
 if __name__ == "__main__":

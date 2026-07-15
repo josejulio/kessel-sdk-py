@@ -1,26 +1,33 @@
 """
-Connect-Python client wrapper for API compatibility.
+Connect-Python client wrapper for exception compatibility.
 
-Provides a minimal wrapper that maps PascalCase method names (grpcio convention)
-to snake_case method names (Connect-Python convention).
-
-Exceptions propagate naturally as ConnectError - no wrapping needed.
+Wraps ConnectError exceptions as RpcError to maintain API compatibility
+across transport implementations.
 """
 
-import re
+import functools
+from connectrpc.errors import ConnectError
+from kessel.grpc import RpcError
 
 
 class StubWrapper:
     """
-    Minimal wrapper to map stub.Check() -> client.check()
+    Minimal wrapper to convert ConnectError to RpcError.
 
-    This wrapper exists solely to maintain API compatibility by converting
-    method name casing. Exceptions are not wrapped - they propagate as
-    ConnectError naturally.
+    This wrapper exists to maintain API compatibility by:
+    1. Wrapping ConnectError exceptions as RpcError
+    2. Proxying context manager support from underlying Connect client
+    3. Proxying all method calls directly to Connect client (snake_case per Python conventions)
 
     Example:
-        stub.Check(request)  -> client.check(request)
-        stub.ReportResource(request) -> client.report_resource(request)
+        client = ClientBuilder(...).build()
+        with client:  # Context manager support
+            response = client.check(request)  # snake_case per Python/spec conventions
+
+        try:
+            client.check(request)
+        except RpcError as e:  # Wrapped ConnectError
+            print(e.code(), e.details())
     """
 
     def __init__(self, connect_client):
@@ -28,68 +35,75 @@ class StubWrapper:
         Initialize wrapper with Connect client.
 
         Args:
-            connect_client: Connect-Python client instance
+            connect_client: Connect-Python client instance with context manager support
         """
         self._client = connect_client
 
+    def __enter__(self):
+        """Enter context manager - delegates to Connect client."""
+        self._client.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        """Exit context manager - delegates to Connect client."""
+        return self._client.__exit__(*args)
+
     def __getattr__(self, name: str):
         """
-        Proxy method calls from PascalCase to snake_case.
-
-        Automatically called when accessing methods like stub.Check().
-        Converts to snake_case and returns the Connect client's method.
+        Proxy method calls to underlying Connect client with exception wrapping.
 
         Args:
-            name: Method name in PascalCase (e.g., "Check", "ReportResource")
+            name: Method name (snake_case per Python conventions)
 
         Returns:
-            The Connect client's snake_case method
+            Wrapped method that converts ConnectError to RpcError
 
         Raises:
             AttributeError: If the method doesn't exist on Connect client
         """
-        snake_case_name = self._to_snake_case(name)
-
         # Check if Connect client has this method
-        if not hasattr(self._client, snake_case_name):
+        if not hasattr(self._client, name):
             raise AttributeError(
-                f"'{type(self._client).__name__}' has no method '{snake_case_name}' "
-                f"(mapped from '{name}')"
+                f"'{type(self._client).__name__}' has no method '{name}'"
             )
 
-        # Return the method directly - no wrapper needed
-        return getattr(self._client, snake_case_name)
+        # Get the method and wrap it to convert exceptions
+        method = getattr(self._client, name)
+        return self._wrap_method(method)
 
     @staticmethod
-    def _to_snake_case(name: str) -> str:
+    def _wrap_method(method):
         """
-        Convert PascalCase to snake_case.
-
-        Examples:
-            Check -> check
-            CheckSelf -> check_self
-            ReportResource -> report_resource
-            StreamedListObjects -> streamed_list_objects
+        Wrap a Connect client method to convert ConnectError to RpcError.
 
         Args:
-            name: PascalCase string
+            method: Connect client method (sync)
 
         Returns:
-            snake_case string
+            Wrapped method that raises RpcError instead of ConnectError
         """
-        # Insert underscore before uppercase letters (except first)
-        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
-        # Insert underscore before uppercase letters preceded by lowercase/digit
-        s2 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1)
-        # Convert to lowercase
-        return s2.lower()
+
+        @functools.wraps(method)
+        def wrapped(*args, **kwargs):
+            try:
+                return method(*args, **kwargs)
+            except ConnectError as e:
+                raise RpcError(e) from e
+
+        return wrapped
 
 
 class AsyncStubWrapper:
     """
-    Minimal async wrapper to map stub.Check() -> client.check()
+    Minimal async wrapper to convert ConnectError to RpcError.
 
-    Same as StubWrapper but for async clients.
+    Same as StubWrapper but for async clients. Wraps ConnectError as RpcError
+    and proxies async context manager support.
+
+    Example:
+        client = ClientBuilder(...).build_async()
+        async with client:  # Async context manager support
+            response = await client.check(request)  # snake_case per Python/spec conventions
     """
 
     def __init__(self, connect_client):
@@ -97,99 +111,58 @@ class AsyncStubWrapper:
         Initialize wrapper with Connect async client.
 
         Args:
-            connect_client: Connect-Python async client instance
-        """
-        self._client = connect_client
-
-    def __getattr__(self, name: str):
-        """
-        Proxy async method calls from PascalCase to snake_case.
-
-        Args:
-            name: Method name in PascalCase
-
-        Returns:
-            The Connect client's snake_case method
-
-        Raises:
-            AttributeError: If the method doesn't exist on Connect client
-        """
-        snake_case_name = self._to_snake_case(name)
-
-        if not hasattr(self._client, snake_case_name):
-            raise AttributeError(
-                f"'{type(self._client).__name__}' has no method '{snake_case_name}' "
-                f"(mapped from '{name}')"
-            )
-
-        # Return the method directly - no wrapper needed
-        return getattr(self._client, snake_case_name)
-
-    @staticmethod
-    def _to_snake_case(name: str) -> str:
-        """Convert PascalCase to snake_case."""
-        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
-        s2 = re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1)
-        return s2.lower()
-
-
-class ChannelWrapper:
-    """
-    Wraps Connect client to provide channel-like context manager.
-
-    Provides compatibility with grpcio's channel context manager pattern.
-    """
-
-    def __init__(self, connect_client):
-        """
-        Initialize wrapper with Connect client.
-
-        Args:
-            connect_client: Connect-Python client
-        """
-        self._client = connect_client
-
-    def __enter__(self):
-        """Enter context manager."""
-        # Connect clients don't have context managers, just return self
-        return self
-
-    def __exit__(self, *args):
-        """Exit context manager."""
-        # Connect clients don't need explicit cleanup
-        pass
-
-    def close(self):
-        """Close the underlying client."""
-        if hasattr(self._client, "close"):
-            return self._client.close()
-
-
-class AsyncChannelWrapper:
-    """
-    Wraps async Connect client to provide channel-like async context manager.
-    """
-
-    def __init__(self, connect_client):
-        """
-        Initialize wrapper with async Connect client.
-
-        Args:
-            connect_client: Connect-Python async client
+            connect_client: Connect-Python async client instance with async context manager support
         """
         self._client = connect_client
 
     async def __aenter__(self):
-        """Enter async context manager."""
-        # Connect clients don't have context managers, just return self
+        """Enter async context manager - delegates to Connect client."""
+        await self._client.__aenter__()
         return self
 
     async def __aexit__(self, *args):
-        """Exit async context manager."""
-        # Connect clients don't need explicit cleanup
-        pass
+        """Exit async context manager - delegates to Connect client."""
+        return await self._client.__aexit__(*args)
 
-    async def close(self):
-        """Close the underlying client."""
-        if hasattr(self._client, "close"):
-            return await self._client.close()
+    def __getattr__(self, name: str):
+        """
+        Proxy async method calls to underlying Connect client with exception wrapping.
+
+        Args:
+            name: Method name (snake_case per Python conventions)
+
+        Returns:
+            Wrapped async method that converts ConnectError to RpcError
+
+        Raises:
+            AttributeError: If the method doesn't exist on Connect client
+        """
+        if not hasattr(self._client, name):
+            raise AttributeError(
+                f"'{type(self._client).__name__}' has no method '{name}'"
+            )
+
+        # Get the method and wrap it to convert exceptions
+        method = getattr(self._client, name)
+        return self._wrap_async_method(method)
+
+    @staticmethod
+    def _wrap_async_method(method):
+        """
+        Wrap an async Connect client method to convert ConnectError to RpcError.
+
+        Args:
+            method: Connect client method (async)
+
+        Returns:
+            Wrapped async method that raises RpcError instead of ConnectError
+        """
+
+        @functools.wraps(method)
+        async def wrapped(*args, **kwargs):
+            try:
+                return await method(*args, **kwargs)
+            except ConnectError as e:
+                raise RpcError(e) from e
+
+        return wrapped
